@@ -1,5 +1,4 @@
 from mlx_lm import load
-
 from mlx_omni_server.chat.mlx.tools.chat_template import ChatTemplate
 
 
@@ -78,7 +77,7 @@ class TestChatTemplate:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What's in this image?"},
-                    # Currently does not support image type, this part of the content will be removed when implemented.
+                    # Currently does not support image type, this part will be removed when implemented.
                     {"type": "image", "image_url": "data:image/jpeg;base64,..."},
                     {"type": "text", "text": "Please describe it."},
                 ],
@@ -222,18 +221,17 @@ class TestChatTemplate:
         """Test that tool_calls JSON arguments are converted to dicts for Jinja template"""
         # This is a unit test for the JSON conversion logic in chat_template.py
         # We test the conversion logic directly without loading models
-        
-        import json
+
         from mlx_omni_server.chat.mlx.tools.chat_template import ChatTemplate
-        
+
         # Mock tokenizer (we don't need actual tokenization for this test)
         class MockTokenizer:
             def apply_chat_template(self, messages, **kwargs):
                 # Return the messages as-is for testing the conversion logic
                 return str(messages)
-        
+
         chat_template = ChatTemplate(tools_parser_type="qwen3", tokenizer=MockTokenizer())
-        
+
         # Test with OpenAI format tool_calls (JSON string arguments)
         messages = [
             {
@@ -266,7 +264,7 @@ class TestChatTemplate:
         except Exception as e:
             if "Can only get item pairs from a mapping" in str(e):
                 # This is the error we're trying to fix
-                raise AssertionError(f"JSON conversion failed: {e}")
+                raise AssertionError("JSON conversion failed") from e
             else:
                 # Other errors are expected (e.g., tokenizer not fully mocked)
                 print(f"✓ JSON conversion worked (other error: {type(e).__name__})")
@@ -274,49 +272,50 @@ class TestChatTemplate:
     def test_openai_adapter_tool_call_conversion(self):
         """Test that _convert_tool_calls function converts internal format to OpenAI format"""
         import json
-        from mlx_omni_server.chat.openai.openai_adapter import _convert_tool_calls
+
         from mlx_omni_server.chat.mlx.core_types import ToolCall as CoreToolCall
+        from mlx_omni_server.chat.openai.openai_adapter import _convert_tool_calls
         from mlx_omni_server.chat.openai.schema import ToolCall as SchemaToolCall
-        
+
         # Test with internal CoreToolCall format (dict arguments)
         core_tool_calls = [
             CoreToolCall(
                 id="call_123",
-                name="get_weather", 
+                name="get_weather",
                 arguments={"location": "NYC", "unit": "celsius"}  # dict format
             )
         ]
-        
+
         # Convert to OpenAI format
         openai_tool_calls = _convert_tool_calls(core_tool_calls)
-        
+
         # Verify conversion
         assert openai_tool_calls is not None
         assert len(openai_tool_calls) == 1
-        
+
         tool_call = openai_tool_calls[0]
         assert isinstance(tool_call, SchemaToolCall)
         assert tool_call.id == "call_123"
         assert tool_call.type == "function"
         assert tool_call.function.name == "get_weather"
-        
+
         # Arguments should be JSON string
         assert isinstance(tool_call.function.arguments, str)
         args_dict = json.loads(tool_call.function.arguments)
         assert args_dict == {"location": "NYC", "unit": "celsius"}
-        
+
         print("✓ OpenAI adapter tool call conversion test passed")
 
     def test_openai_adapter_none_input(self):
         """Test that _convert_tool_calls handles None input correctly"""
         from mlx_omni_server.chat.openai.openai_adapter import _convert_tool_calls
-        
+
         # Test with None input
         result = _convert_tool_calls(None)
         assert result is None
-        
+
         # Test with empty list (should also return None due to "if not core_tool_calls")
         result = _convert_tool_calls([])
         assert result is None
-        
+
         print("✓ OpenAI adapter None input test passed")

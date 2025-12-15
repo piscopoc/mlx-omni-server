@@ -1,6 +1,6 @@
 import json
 from abc import ABC
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
@@ -39,8 +39,8 @@ class ChatTemplate(ABC):
         self.tokenizer = tokenizer
         self.has_tools = False
         self.reason_decoder = None
-        self.enable_thinking_parse: Optional[bool] = None
-        self.tools_parser: Optional[BaseToolParser] = load_tools_parser(
+        self.enable_thinking_parse: bool | None = None
+        self.tools_parser: BaseToolParser | None = load_tools_parser(
             tools_parser_type
         )
 
@@ -50,9 +50,9 @@ class ChatTemplate(ABC):
 
     def apply_chat_template(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs,
     ) -> str:
         """Encode tools and conversation into a prompt string.
@@ -98,7 +98,8 @@ class ChatTemplate(ABC):
                             try:
                                 return json.loads(args)
                             except json.JSONDecodeError:
-                                pass  # Keep as string if not valid JSON
+                                # Keep as string if not valid JSON
+                                return args
                         return args
 
                     # Handle OpenAI format with nested function object
@@ -142,7 +143,8 @@ class ChatTemplate(ABC):
             self.has_tools = True
             # Handle different tool_choice formats:
             # 1. String type: "auto", "required", "none"
-            # 2. Dict type: {"type": "function", "function": {"name": "func_name"}} for forced specific function calls
+            # 2. Dict type: {"type": "function", "function": {"name": "func_name"}} 
+            #    for forced specific function calls
             should_add_tool_calls = False
 
             if isinstance(tool_choice, str):
@@ -182,11 +184,10 @@ class ChatTemplate(ABC):
         stripped_prompt = prompt.rstrip()  # Single rstrip call for efficiency
 
         # Auto-detect thinking if not explicitly set
-        if enable_thinking_parse is None:
-            if self._detect_thinking_from_prompt(prompt):
-                self.enable_thinking_parse = True
-                enable_thinking_parse = True
-            # If no <think> detected, remain None (no modification)
+        if enable_thinking_parse is None and self._detect_thinking_from_prompt(prompt):
+            self.enable_thinking_parse = True
+            enable_thinking_parse = True
+        # If no <think> detected, remain None (no modification)
 
         if enable_thinking_parse is True:
             if skip_thinking_prefill:
