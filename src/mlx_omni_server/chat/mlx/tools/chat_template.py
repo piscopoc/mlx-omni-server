@@ -77,7 +77,7 @@ class ChatTemplate(ABC):
                 )
             # Convert tool_calls arguments from JSON string to dict for Jinja template
             # The Qwen3 chat template expects arguments as a dict, not a JSON string
-            if "tool_calls" in msg_dict and msg_dict["tool_calls"]:
+            if msg_dict.get("tool_calls"):
                 converted_tool_calls = []
                 for tc in msg_dict["tool_calls"]:
                     # Convert Pydantic models to dict using model_dump()
@@ -86,28 +86,29 @@ class ChatTemplate(ABC):
                     elif isinstance(tc, dict):
                         tc_dict = tc.copy()
                     else:
+                        # Unexpected type - add as-is without conversion
                         tc_dict = tc
                         converted_tool_calls.append(tc_dict)
                         continue
+
+                    # Helper function to parse JSON arguments
+                    def _parse_json_arg(args):
+                        """Parse JSON string argument to dict, return original if not valid JSON."""
+                        if isinstance(args, str):
+                            try:
+                                return json.loads(args)
+                            except json.JSONDecodeError:
+                                pass  # Keep as string if not valid JSON
+                        return args
 
                     # Handle OpenAI format with nested function object
                     if "function" in tc_dict and isinstance(tc_dict["function"], dict):
                         func = tc_dict["function"]
                         if "arguments" in func:
-                            args = func["arguments"]
-                            if isinstance(args, str):
-                                try:
-                                    func["arguments"] = json.loads(args)
-                                except json.JSONDecodeError:
-                                    pass  # Keep as string if not valid JSON
+                            func["arguments"] = _parse_json_arg(func["arguments"])
                     # Handle direct arguments field
                     elif "arguments" in tc_dict:
-                        args = tc_dict["arguments"]
-                        if isinstance(args, str):
-                            try:
-                                tc_dict["arguments"] = json.loads(args)
-                            except json.JSONDecodeError:
-                                pass  # Keep as string if not valid JSON
+                        tc_dict["arguments"] = _parse_json_arg(tc_dict["arguments"])
                     converted_tool_calls.append(tc_dict)
                 msg_dict["tool_calls"] = converted_tool_calls
             conversation.append(msg_dict)
