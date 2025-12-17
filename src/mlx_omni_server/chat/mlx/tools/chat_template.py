@@ -60,8 +60,8 @@ class ChatTemplate(ABC):
         self.tokenizer = tokenizer
         self.has_tools = False
         self.reason_decoder = None
-        self.enable_thinking_parse: bool | None = None
-        self.tools_parser: BaseToolParser | None = load_tools_parser(tools_parser_type)
+        self.enable_thinking_parse: Optional[bool] = None
+        self.tools_parser: Optional[BaseToolParser] = load_tools_parser(tools_parser_type)
 
         # Initialize tool call markers with default values
         self.start_tool_calls = self.tools_parser.start_tool_calls

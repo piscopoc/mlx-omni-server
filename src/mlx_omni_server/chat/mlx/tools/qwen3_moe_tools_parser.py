@@ -22,13 +22,13 @@ class Qwen3MoeToolParser(BaseToolParser):
     - array/object parameters are parsed from JSON
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.start_tool_calls = "<tool_call>"
         self.end_tool_calls = "</tool_call>"
         self.strict_mode = False
-        self._tools_schema: Dict[str, Dict] = {}
+        self._tools_schema: Dict[str, Dict[str, Any]] = {}
 
-    def set_tools_schema(self, tools: Optional[List[Dict]] = None) -> None:
+    def set_tools_schema(self, tools: Optional[List[Dict[str, Any]]] = None) -> None:
         """Set tools schema for type conversion.
 
         Args:
@@ -123,7 +123,9 @@ class Qwen3MoeToolParser(BaseToolParser):
             return None
 
         # Log if schema is available
-        logger.debug(f"parse_tools: schema available for functions: {list(self._tools_schema.keys())}")
+        logger.debug(
+            f"parse_tools: schema available for functions: {list(self._tools_schema.keys())}"
+        )
 
         try:
             # In strict mode, check format first
@@ -131,7 +133,7 @@ class Qwen3MoeToolParser(BaseToolParser):
                 logger.debug("parse_tools: text doesn't match strict format")
                 return None
 
-            tool_calls = []
+            tool_calls: List[ToolCall] = []
 
             # Pattern to match function name and parameters in XML format
             # Handles both <tool_call><function=name>...</function></tool_call>
@@ -140,7 +142,7 @@ class Qwen3MoeToolParser(BaseToolParser):
 
             # Check if text contains tool_call markers
             if "<tool_call>" in text or "<function=" in text:
-                logger.info(f"parse_tools: detected potential tool call markers in text")
+                logger.info("parse_tools: detected potential tool call markers in text")
             else:
                 logger.debug("parse_tools: no tool call markers found")
 
@@ -171,7 +173,7 @@ class Qwen3MoeToolParser(BaseToolParser):
             else:
                 logger.debug("parse_tools: no tool calls extracted from text")
 
-            return tool_calls if tool_calls else None
+            return tool_calls or None
 
         except Exception as e:
             logger.error(f"Error parsing Qwen3 MoE tool calls: {e}")
@@ -194,7 +196,7 @@ class Qwen3MoeToolParser(BaseToolParser):
         matches = re.findall(tool_call_pattern, text, re.DOTALL)
         return len(matches) == 1 and matches[0].strip() == stripped_text
 
-    def _extract_parameters(self, content: str, function_name: str) -> dict:
+    def _extract_parameters(self, content: str, function_name: str) -> Dict[str, Any]:
         """Extract parameters from function content using regex.
 
         Args:
@@ -204,7 +206,7 @@ class Qwen3MoeToolParser(BaseToolParser):
         Returns:
             Dictionary of parameter name-value pairs with appropriate types
         """
-        parameters = {}
+        parameters: Dict[str, Any] = {}
 
         # Pattern to match <parameter=name>value</parameter>
         param_pattern = r"<parameter=([^>]+)>(.*?)</parameter>"

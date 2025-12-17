@@ -1,18 +1,24 @@
 import json
 import time
 import uuid
-from typing import Generator, List, Optional, Tuple
+from typing import Any, Generator, List, Optional, Tuple
 
-from mlx_omni_server.chat.mlx.chat_generator import (DEFAULT_MAX_TOKENS,
-                                                     ChatGenerator)
+from mlx_omni_server.chat.mlx.chat_generator import (
+    DEFAULT_MAX_TOKENS,
+    ChatGenerator,
+)
 from mlx_omni_server.chat.mlx.core_types import ToolCall as CoreToolCall
-from mlx_omni_server.chat.openai.schema import (ChatCompletionChoice,
-                                                ChatCompletionChunk,
-                                                ChatCompletionChunkChoice,
-                                                ChatCompletionRequest,
-                                                ChatCompletionResponse,
-                                                ChatCompletionUsage,
-                                                ChatMessage, Role, ToolCall)
+from mlx_omni_server.chat.openai.schema import (
+    ChatCompletionChoice,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionUsage,
+    ChatMessage,
+    Role,
+    ToolCall,
+)
 from mlx_omni_server.utils.logger import logger
 
 # Tool call XML markers used by models like Qwen3-Coder
@@ -109,11 +115,7 @@ class OpenAIAdapter:
 
     def _prepare_generation_params(self, request: ChatCompletionRequest) -> dict:
         """Prepare common parameters for both generate and stream_generate."""
-        max_tokens = (
-            request.max_completion_tokens
-            or request.max_tokens
-            or self._default_max_tokens
-        )
+        max_tokens = request.max_completion_tokens or request.max_tokens or self._default_max_tokens
 
         # Extract parameters from request and extra params
         extra_params = request.get_extra_params()
@@ -147,9 +149,7 @@ class OpenAIAdapter:
         # Convert messages to dict format
         messages = [
             {
-                "role": (
-                    msg.role.value if hasattr(msg.role, "value") else str(msg.role)
-                ),
+                "role": (msg.role.value if hasattr(msg.role, "value") else str(msg.role)),
                 "content": msg.content,
                 **({"name": msg.name} if msg.name else {}),
                 **({"tool_calls": msg.tool_calls} if msg.tool_calls else {}),
@@ -240,17 +240,16 @@ class OpenAIAdapter:
             Tuple of (tool_calls or None, finish_reason)
         """
         text_preview = (
-            accumulated_text[:500] + "..."
-            if len(accumulated_text) > 500
-            else accumulated_text
+            accumulated_text[:500] + "..." if len(accumulated_text) > 500 else accumulated_text
         )
         logger.info(f"Stream complete. Parsing for tool calls. Text preview: {text_preview}")
 
         chat_result = self._generate_wrapper.chat_template.parse_chat_response(
             accumulated_text
         )
+        content_preview = chat_result.content[:100] if chat_result.content else None
         logger.debug(
-            f"Parse result: content={chat_result.content[:100] if chat_result.content else None}..., "
+            f"Parse result: content={content_preview}..., "
             f"tool_calls={chat_result.tool_calls}"
         )
 
@@ -271,7 +270,7 @@ class OpenAIAdapter:
         content: Optional[str] = None,
         tool_calls: Optional[List[ToolCall]] = None,
         finish_reason: Optional[str] = None,
-        logprobs: Optional[object] = None,
+        logprobs: Optional[Any] = None,
     ) -> ChatCompletionChunk:
         """Create a streaming chunk with the given content or tool calls.
 
@@ -361,9 +360,7 @@ class OpenAIAdapter:
                         index=0,
                         message=message,
                         finish_reason=(
-                            "tool_calls"
-                            if message.tool_calls
-                            else (result.finish_reason or "stop")
+                            "tool_calls" if message.tool_calls else (result.finish_reason or "stop")
                         ),
                         logprobs=result.logprobs,
                     )
@@ -379,7 +376,7 @@ class OpenAIAdapter:
             )
         except Exception as e:
             logger.error(f"Failed to generate completion: {str(e)}", exc_info=True)
-            raise RuntimeError(f"Failed to generate completion: {str(e)}")
+            raise RuntimeError(f"Failed to generate completion: {str(e)}") from e
 
     def generate_stream(
         self,
@@ -428,8 +425,8 @@ class OpenAIAdapter:
 
                 # Filter tool call XML when tools are available
                 if has_tools and content:
-                    stream_content, pending_buffer, in_tool_call = (
-                        self._filter_stream_content(content, pending_buffer, in_tool_call)
+                    stream_content, pending_buffer, in_tool_call = self._filter_stream_content(
+                        content, pending_buffer, in_tool_call
                     )
                 else:
                     stream_content = content
@@ -437,7 +434,8 @@ class OpenAIAdapter:
                 # Yield content chunk
                 if stream_content:
                     yield self._create_stream_chunk(
-                        chat_id, request.model,
+                        chat_id,
+                        request.model,
                         content=stream_content,
                         logprobs=chunk.logprobs,
                     )
@@ -455,7 +453,8 @@ class OpenAIAdapter:
 
             # Emit final chunk with finish_reason and optional tool_calls
             yield self._create_stream_chunk(
-                chat_id, request.model,
+                chat_id,
+                request.model,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
             )
@@ -473,13 +472,11 @@ class OpenAIAdapter:
                 if cached_tokens > 0:
                     from .schema import PromptTokensDetails
 
-                    prompt_tokens_details = PromptTokensDetails(
-                        cached_tokens=cached_tokens
-                    )
+                    prompt_tokens_details = PromptTokensDetails(cached_tokens=cached_tokens)
 
                 yield ChatCompletionChunk(
                     id=chat_id,
-                    created=created,
+                    created=int(time.time()),
                     model=request.model,
                     choices=[
                         ChatCompletionChunkChoice(
