@@ -1,10 +1,15 @@
+import json
+import logging
 from abc import ABC
 from typing import Any, Dict, List, Optional, Union
 
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+logger = logging.getLogger(__name__)
+
 from ..core_types import ChatTemplateResult
 from .base_tools import BaseToolParser
+from .glm45_tools_parser import GLM45ToolParser
 from .hugging_face import HuggingFaceToolParser
 from .llama3 import Llama3ToolParser
 from .mistral import MistralToolsParser
@@ -13,6 +18,24 @@ from .thinking_decoder import ThinkingDecoder
 
 # Constants
 THINK_TAG = "<think>"
+
+
+def _parse_json_arg(args: Any) -> Any:
+    """Parse JSON string argument to dict, return original if not valid JSON.
+
+    Args:
+        args: The argument value to parse (may be a JSON string or already parsed)
+
+    Returns:
+        Parsed dict/list if args was valid JSON string, otherwise original value
+    """
+    if isinstance(args, str):
+        try:
+            return json.loads(args)
+        except json.JSONDecodeError as e:
+            logger.debug(f"Failed to parse tool call arguments as JSON: {e}")
+            return args
+    return args
 
 
 def load_tools_parser(tools_parser_type: str) -> BaseToolParser:
@@ -24,6 +47,8 @@ def load_tools_parser(tools_parser_type: str) -> BaseToolParser:
         return HuggingFaceToolParser()
     if tools_parser_type == "qwen3_moe":
         return Qwen3MoeToolParser()
+    if tools_parser_type == "glm4_moe":
+        return GLM45ToolParser()
     else:
         return HuggingFaceToolParser()
 
@@ -39,9 +64,7 @@ class ChatTemplate(ABC):
         self.has_tools = False
         self.reason_decoder = None
         self.enable_thinking_parse: Optional[bool] = None
-        self.tools_parser: Optional[BaseToolParser] = load_tools_parser(
-            tools_parser_type
-        )
+        self.tools_parser: Optional[BaseToolParser] = load_tools_parser(tools_parser_type)
 
         # Initialize tool call markers with default values
         self.start_tool_calls = self.tools_parser.start_tool_calls
@@ -70,10 +93,34 @@ class ChatTemplate(ABC):
             msg_dict = message.copy()  # Make a copy to avoid modifying original
             if isinstance(msg_dict.get("content"), list):
                 msg_dict["content"] = "\n\n".join(
-                    item["text"]
-                    for item in msg_dict["content"]
-                    if item.get("type") == "text"
+                    item["text"] for item in msg_dict["content"] if item.get("type") == "text"
                 )
+            # Convert tool_calls arguments from JSON string to dict for Jinja template
+            # The Qwen3 chat template expects arguments as a dict, not a JSON string
+            if msg_dict.get("tool_calls"):
+                converted_tool_calls = []
+                for tc in msg_dict["tool_calls"]:
+                    # Convert Pydantic models to dict using model_dump()
+                    if hasattr(tc, "model_dump"):
+                        tc_dict = tc.model_dump()
+                    elif isinstance(tc, dict):
+                        tc_dict = tc.copy()
+                    else:
+                        # Unexpected type - add as-is without conversion
+                        tc_dict = tc
+                        converted_tool_calls.append(tc_dict)
+                        continue
+
+                    # Handle OpenAI format with nested function object
+                    if "function" in tc_dict and isinstance(tc_dict["function"], dict):
+                        func = tc_dict["function"]
+                        if "arguments" in func:
+                            func["arguments"] = _parse_json_arg(func["arguments"])
+                    # Handle direct arguments field
+                    elif "arguments" in tc_dict:
+                        tc_dict["arguments"] = _parse_json_arg(tc_dict["arguments"])
+                    converted_tool_calls.append(tc_dict)
+                msg_dict["tool_calls"] = converted_tool_calls
             conversation.append(msg_dict)
 
         if kwargs:
@@ -103,9 +150,13 @@ class ChatTemplate(ABC):
 
         if tools:
             self.has_tools = True
+            # Pass tools schema to parser for type conversion
+            if hasattr(self.tools_parser, "set_tools_schema"):
+                self.tools_parser.set_tools_schema(tools)
             # Handle different tool_choice formats:
             # 1. String type: "auto", "required", "none"
-            # 2. Dict type: {"type": "function", "function": {"name": "func_name"}} for forced specific function calls
+            # 2. Dict type: {"type": "function", "function": {"name": "func_name"}}
+            #    for forced specific function calls
             should_add_tool_calls = False
 
             if isinstance(tool_choice, str):
@@ -145,11 +196,10 @@ class ChatTemplate(ABC):
         stripped_prompt = prompt.rstrip()  # Single rstrip call for efficiency
 
         # Auto-detect thinking if not explicitly set
-        if enable_thinking_parse is None:
-            if self._detect_thinking_from_prompt(prompt):
-                self.enable_thinking_parse = True
-                enable_thinking_parse = True
-            # If no <think> detected, remain None (no modification)
+        if enable_thinking_parse is None and self._detect_thinking_from_prompt(prompt):
+            self.enable_thinking_parse = True
+            enable_thinking_parse = True
+        # If no <think> detected, remain None (no modification)
 
         if enable_thinking_parse is True:
             if skip_thinking_prefill:
@@ -198,12 +248,16 @@ class ChatTemplate(ABC):
             thinking = result.get("thinking")
 
         if self.has_tools:
+            logger.debug(f"parse_chat_response: has_tools=True, parser type={type(self.tools_parser).__name__}")
             tool_calls = self.tools_parser.parse_tools(content)
 
             # If tool calls were found, clear content to avoid duplication
             if tool_calls:
+                logger.debug(f"parse_chat_response: found {len(tool_calls)} tool call(s)")
                 content = ""
+            else:
+                logger.debug("parse_chat_response: no tool calls found by parser")
+        else:
+            logger.debug("parse_chat_response: has_tools=False, skipping tool parsing")
 
-        return ChatTemplateResult(
-            content=content, thinking=thinking, tool_calls=tool_calls
-        )
+        return ChatTemplateResult(content=content, thinking=thinking, tool_calls=tool_calls)

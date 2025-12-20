@@ -48,16 +48,18 @@ class FunctionCall(BaseModel):
 class ToolCall(BaseModel):
     """Tool call from model output."""
 
+    index: Optional[int] = None  # Required for streaming responses
     id: str
     type: ToolType = ToolType.FUNCTION
     function: FunctionCall
 
     @classmethod
     def from_llama_output(
-        cls, name: str, parameters: Dict[str, Any], call_id: str
+        cls, name: str, parameters: Dict[str, Any], call_id: str, index: int = 0
     ) -> "ToolCall":
         """Create a ToolCall instance from Llama model output format."""
         return cls(
+            index=index,
             id=call_id,
             type=ToolType.FUNCTION,
             function=FunctionCall(

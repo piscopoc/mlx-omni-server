@@ -1,5 +1,4 @@
 from mlx_lm import load
-
 from mlx_omni_server.chat.mlx.tools.chat_template import ChatTemplate
 
 
@@ -78,7 +77,7 @@ class TestChatTemplate:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What's in this image?"},
-                    # Currently does not support image type, this part of the content will be removed when implemented.
+                    # Image type not yet supported - will be filtered out
                     {"type": "image", "image_url": "data:image/jpeg;base64,..."},
                     {"type": "text", "text": "Please describe it."},
                 ],
@@ -159,7 +158,7 @@ class TestChatTemplate:
             messages=messages, tools=tools, tool_choice="auto"
         )
         assert chat_template2.has_tools is True
-        # auto choice should not add tool_calls prefix
+        assert not prompt_auto.strip().endswith(chat_template2.start_tool_calls)
 
         # Test none choice (should not add prefix)
         chat_template3 = ChatTemplate(tools_parser_type="llama", tokenizer=tokenizer)
@@ -167,7 +166,7 @@ class TestChatTemplate:
             messages=messages, tools=tools, tool_choice="none"
         )
         assert chat_template3.has_tools is True
-        # none choice should not add tool_calls prefix
+        assert not prompt_none.strip().endswith(chat_template3.start_tool_calls)
 
     def test_thinking_with_tools(self):
         """Test thinking mode combined with tools"""
@@ -213,7 +212,102 @@ class TestChatTemplate:
         messages = [{"role": "user", "content": "test"}]
 
         # This should not raise an error even with extra kwargs
-        prompt = chat_template.apply_chat_template(
-            messages=messages, custom_param="test_value"
-        )
+        prompt = chat_template.apply_chat_template(messages=messages, custom_param="test_value")
         assert isinstance(prompt, str)
+
+    def test_tool_calls_json_conversion(self):
+        """Test that tool_calls JSON arguments are converted to dicts for Jinja template."""
+        from mlx_omni_server.chat.mlx.tools.chat_template import ChatTemplate
+
+        # Test messages with OpenAI format tool_calls (JSON string arguments)
+        messages = [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "Let me check the weather for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"location": "NYC", "unit": "celsius"}',
+                        },
+                    }
+                ],
+            },
+        ]
+
+        # Mock tokenizer that verifies JSON arguments were converted to dicts
+        class VerifyingMockTokenizer:
+            def apply_chat_template(self, conversation, **_kwargs):
+                for msg in conversation:
+                    if "tool_calls" in msg:
+                        for tc in msg["tool_calls"]:
+                            if "function" in tc and isinstance(tc["function"], dict):
+                                func = tc["function"]
+                                if "arguments" in func:
+                                    if isinstance(func["arguments"], str):
+                                        raise TypeError("Expected dict arguments")
+                                    assert isinstance(func["arguments"], dict)
+                                    assert func["arguments"]["location"] == "NYC"
+                                    assert func["arguments"]["unit"] == "celsius"
+                return "conversion successful"
+
+        chat_template = ChatTemplate(
+            tools_parser_type="qwen3", tokenizer=VerifyingMockTokenizer()
+        )
+
+        result = chat_template.apply_chat_template(messages=messages)
+        assert result == "conversion successful"
+
+    def test_openai_adapter_tool_call_conversion(self):
+        """Test that _convert_tool_calls function converts internal format to OpenAI format"""
+        import json
+
+        from mlx_omni_server.chat.mlx.core_types import ToolCall as CoreToolCall
+        from mlx_omni_server.chat.openai.openai_adapter import _convert_tool_calls
+        from mlx_omni_server.chat.openai.schema import ToolCall as SchemaToolCall
+
+        # Test with internal CoreToolCall format (dict arguments)
+        core_tool_calls = [
+            CoreToolCall(
+                id="call_123",
+                name="get_weather",
+                arguments={"location": "NYC", "unit": "celsius"},  # dict format
+            )
+        ]
+
+        # Convert to OpenAI format
+        openai_tool_calls = _convert_tool_calls(core_tool_calls)
+
+        # Verify conversion
+        assert openai_tool_calls is not None
+        assert len(openai_tool_calls) == 1
+
+        tool_call = openai_tool_calls[0]
+        assert isinstance(tool_call, SchemaToolCall)
+        assert tool_call.id == "call_123"
+        assert tool_call.type == "function"
+        assert tool_call.function.name == "get_weather"
+
+        # Arguments should be JSON string
+        assert isinstance(tool_call.function.arguments, str)
+        args_dict = json.loads(tool_call.function.arguments)
+        assert args_dict == {"location": "NYC", "unit": "celsius"}
+
+        print("✓ OpenAI adapter tool call conversion test passed")
+
+    def test_openai_adapter_none_input(self):
+        """Test that _convert_tool_calls handles None input correctly"""
+        from mlx_omni_server.chat.openai.openai_adapter import _convert_tool_calls
+
+        # Test with None input
+        result = _convert_tool_calls(None)
+        assert result is None
+
+        # Test with empty list (should also return None due to "if not core_tool_calls")
+        result = _convert_tool_calls([])
+        assert result is None
+
+        print("✓ OpenAI adapter None input test passed")

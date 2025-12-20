@@ -8,11 +8,19 @@ from ..core_types import ToolCall
 from .base_tools import BaseToolParser
 
 
-class Qwen3MoeToolParser(BaseToolParser):
-    """Simplified tools parser for Qwen3 MoE models.
+class GLM45ToolParser(BaseToolParser):
+    """Tools parser for GLM-4.5 (glm4_moe) models.
 
-    Parses tool calls in the XML-like format using regex patterns.
-    Handles both complete and malformed tool call formats.
+    Parses tool calls in the GLM-4.5 XML format using regex patterns.
+    The format uses <arg_key>/<arg_value> pairs for parameters.
+
+    Format:
+        <tool_call>function_name
+        <arg_key>param1</arg_key>
+        <arg_value>value1</arg_value>
+        <arg_key>param2</arg_key>
+        <arg_value>value2</arg_value>
+        </tool_call>
 
     Supports schema-based type conversion to match OpenAI API format:
     - integer parameters are converted to int
@@ -80,14 +88,18 @@ class Qwen3MoeToolParser(BaseToolParser):
             try:
                 return int(value)
             except ValueError:
-                logger.debug(f"Failed to convert '{value}' to integer for {func_name}.{param_name}")
+                logger.debug(
+                    f"Failed to convert '{value}' to integer for {func_name}.{param_name}"
+                )
                 return value
 
         if param_type == "number":
             try:
                 return float(value)
             except ValueError:
-                logger.debug(f"Failed to convert '{value}' to number for {func_name}.{param_name}")
+                logger.debug(
+                    f"Failed to convert '{value}' to number for {func_name}.{param_name}"
+                )
                 return value
 
         if param_type == "boolean":
@@ -96,21 +108,25 @@ class Qwen3MoeToolParser(BaseToolParser):
                 return True
             if lower_value == "false":
                 return False
-            logger.debug(f"Unexpected boolean value '{value}' for {func_name}.{param_name}")
+            logger.debug(
+                f"Unexpected boolean value '{value}' for {func_name}.{param_name}"
+            )
             return value
 
         if param_type in ("array", "object"):
             try:
                 return json.loads(value)
             except json.JSONDecodeError:
-                logger.debug(f"Failed to parse JSON for {func_name}.{param_name}: {value}")
+                logger.debug(
+                    f"Failed to parse JSON for {func_name}.{param_name}: {value}"
+                )
                 return value
 
         # Default: return as string
         return value
 
     def parse_tools(self, text: str) -> Optional[List[ToolCall]]:
-        """Parse tool calls from model output using simplified regex approach.
+        """Parse tool calls from GLM-4.5 model output.
 
         Args:
             text: Generated text that may contain tool calls
@@ -135,30 +151,33 @@ class Qwen3MoeToolParser(BaseToolParser):
 
             tool_calls: List[ToolCall] = []
 
-            # Pattern to match function name and parameters in XML format
-            # Handles both <tool_call><function=name>...</function></tool_call>
-            # and malformed <function=name>...</function></tool_call>
-            pattern = r"<function=([^>]+)>(.*?)(?:</function>|</tool_call>)"
-
             # Check if text contains tool_call markers
-            if "<tool_call>" in text or "<function=" in text:
-                logger.debug("parse_tools: detected potential tool call markers in text")
+            if "<tool_call>" in text:
+                logger.debug("parse_tools: detected tool_call markers in text")
             else:
-                logger.debug("parse_tools: no tool call markers found")
+                logger.debug("parse_tools: no tool_call markers found")
+                return None
 
-            matches = re.finditer(pattern, text, re.DOTALL)
+            # Pattern to match complete tool_call blocks
+            tool_call_pattern = r"<tool_call>(.*?)</tool_call>"
+            matches = re.finditer(tool_call_pattern, text, re.DOTALL)
 
             for match in matches:
-                function_name = match.group(1).strip()
-                function_content = match.group(2)
-                logger.debug(f"parse_tools: found function match - name='{function_name}'")
+                tool_call_content = match.group(1)
 
+                # Extract function name (first non-whitespace, non-tag content)
+                function_name = self._extract_function_name(tool_call_content)
                 if not function_name:
+                    logger.debug("parse_tools: could not extract function name")
                     continue
 
-                # Extract parameters from the function content
-                arguments = self._extract_parameters(function_content, function_name)
-                logger.debug(f"parse_tools: extracted arguments for {function_name}: {arguments}")
+                logger.debug(f"parse_tools: found function - name='{function_name}'")
+
+                # Extract parameters from arg_key/arg_value pairs
+                arguments = self._extract_parameters(tool_call_content, function_name)
+                logger.debug(
+                    f"parse_tools: extracted arguments for {function_name}: {arguments}"
+                )
 
                 # Create ToolCall object
                 tool_call = ToolCall(
@@ -169,15 +188,17 @@ class Qwen3MoeToolParser(BaseToolParser):
                 tool_calls.append(tool_call)
 
             if tool_calls:
-                logger.debug(f"parse_tools: successfully parsed {len(tool_calls)} tool call(s)")
+                logger.debug(
+                    f"parse_tools: successfully parsed {len(tool_calls)} tool call(s)"
+                )
             else:
                 logger.debug("parse_tools: no tool calls extracted from text")
 
-        except Exception as e:
-            logger.error(f"Error parsing Qwen3 MoE tool calls: {e}")
-            return None
-        else:
             return tool_calls or None
+
+        except Exception as e:
+            logger.error(f"Error parsing GLM-4.5 tool calls: {e}")
+            return None
 
     def _is_strict_format(self, text: str) -> bool:
         """Check if text follows strict tool call format."""
@@ -196,11 +217,50 @@ class Qwen3MoeToolParser(BaseToolParser):
         matches = re.findall(tool_call_pattern, text, re.DOTALL)
         return len(matches) == 1 and matches[0].strip() == stripped_text
 
-    def _extract_parameters(self, content: str, function_name: str) -> Dict[str, Any]:
-        """Extract parameters from function content using regex.
+    def _extract_function_name(self, content: str) -> Optional[str]:
+        """Extract function name from the beginning of tool_call content.
+
+        In GLM-4.5 format, the function name appears directly after <tool_call>
+        before any <arg_key> tags.
 
         Args:
-            content: Content inside <function>...</function> tags
+            content: Content inside <tool_call>...</tool_call> tags
+
+        Returns:
+            Function name or None if not found
+        """
+        # Remove leading whitespace and get content before first <arg_key>
+        content = content.strip()
+
+        # Find where the first <arg_key> starts (if any)
+        arg_key_pos = content.find("<arg_key>")
+        if arg_key_pos > 0:
+            name_part = content[:arg_key_pos].strip()
+        elif arg_key_pos == 0:
+            # Content starts with <arg_key>, no function name present
+            return None
+        else:
+            # No parameters, entire content might be function name
+            name_part = content.strip()
+
+        # Extract the function name (first word/token)
+        if name_part:
+            # Split on whitespace and take first non-empty part
+            parts = name_part.split()
+            if parts:
+                func_name = parts[0]
+                # Validate: function name should not contain XML tags
+                if "<" in func_name or ">" in func_name:
+                    return None
+                return func_name
+
+        return None
+
+    def _extract_parameters(self, content: str, function_name: str) -> Dict[str, Any]:
+        """Extract parameters from arg_key/arg_value pairs.
+
+        Args:
+            content: Content inside <tool_call>...</tool_call> tags
             function_name: Name of the function (for type lookup)
 
         Returns:
@@ -208,11 +268,14 @@ class Qwen3MoeToolParser(BaseToolParser):
         """
         parameters: Dict[str, Any] = {}
 
-        # Pattern to match <parameter=name>value</parameter>
-        param_pattern = r"<parameter=([^>]+)>(.*?)</parameter>"
-        param_matches = re.finditer(param_pattern, content, re.DOTALL)
+        # Pattern to match <arg_key>name</arg_key> followed by <arg_value>value</arg_value>
+        # Using non-greedy matching with DOTALL for multiline values
+        pair_pattern = (
+            r"<arg_key>\s*(.*?)\s*</arg_key>\s*<arg_value>(.*?)</arg_value>"
+        )
+        pair_matches = re.finditer(pair_pattern, content, re.DOTALL)
 
-        for match in param_matches:
+        for match in pair_matches:
             param_name = match.group(1).strip()
             param_value = match.group(2).strip()
 

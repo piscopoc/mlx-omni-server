@@ -2,6 +2,7 @@ import json
 import uuid
 from typing import List, Optional
 
+from ....utils.logger import logger
 from ..core_types import ToolCall
 from ..core_types import ToolCall as CoreToolCall
 from .base_tools import BaseToolParser
@@ -70,7 +71,7 @@ class MistralToolsParser(BaseToolParser):
                     # Invalid format, return None
                     return None
             except (json.JSONDecodeError, KeyError, ValueError) as e:
-                print(f"Error parsing tool call: {e}")
+                logger.error(f"Error parsing tool call: {e}")
                 return None
 
         return tool_calls if tool_calls else None
