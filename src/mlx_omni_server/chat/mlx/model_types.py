@@ -1,5 +1,6 @@
 """MLX Model types and management."""
 
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -32,6 +33,49 @@ except ImportError:
 
 from ...utils.logger import logger
 from .tools.chat_template import ChatTemplate
+
+
+def resolve_model_path(model_id: str) -> Path:
+    """Resolve model path with custom path precedence.
+
+    Checks MLX_OMNI_MODEL_PATH first, falls back to HuggingFace cache.
+    Expected structure: {custom_path}/org/model-name
+
+    Args:
+        model_id: Model ID (e.g., "org/model-name" or local path)
+
+    Returns:
+        Path to the model directory
+
+    Raises:
+        ValueError: If model cannot be found in custom path and is invalid for HF cache
+    """
+    custom_model_path = os.environ.get("MLX_OMNI_MODEL_PATH")
+
+    if custom_model_path:
+        custom_path = Path(custom_model_path).expanduser().resolve()
+
+        # Build the expected path for the model
+        # Handles both "org/model" and "model" formats
+        model_path = custom_path / model_id
+
+        if model_path.exists() and model_path.is_dir():
+            # Check if config.json exists to validate it's a proper model
+            if (model_path / "config.json").exists():
+                logger.debug(f"Resolved model {model_id} from custom path: {model_path}")
+                return model_path
+            else:
+                logger.debug(
+                    f"Model {model_id} found in custom path but missing config.json, falling back to HF cache"
+                )
+        else:
+            logger.debug(
+                f"Model {model_id} not found in custom path {custom_path}, falling back to HF cache"
+            )
+
+    # Fall back to HuggingFace cache via mlx_lm
+    logger.debug(f"Resolving model {model_id} via HuggingFace cache")
+    return get_model_path(model_id)
 
 
 def load_mlx_model(
@@ -68,7 +112,7 @@ def load_mlx_model(
         logger.info(f"Loaded model: {model_id}")
 
         # Load configuration and create chat tokenizer
-        model_path = get_model_path(model_id)
+        model_path = resolve_model_path(model_id)
         config = load_config(model_path)
         chat_template = ChatTemplate(config["model_type"], tokenizer)
 

@@ -1,7 +1,9 @@
 import importlib
 import json
 import logging
-from typing import Dict, List, Optional, Tuple, Type
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Type, Union
 
 from huggingface_hub import CachedRepoInfo, scan_cache_dir
 
@@ -13,6 +15,16 @@ MODEL_REMAPPING = {
     "phi-msft": "phixtral",
     "falcon_mamba": "mamba",
 }
+
+
+class CustomModelInfo:
+    """Information about a model in custom model path."""
+
+    def __init__(self, model_id: str, model_path: Path, last_modified: float):
+        self.repo_id = model_id
+        self.model_path = model_path
+        self.last_modified = last_modified
+        self.repo_type = "model"
 
 
 class ModelCacheScanner:
@@ -63,17 +75,115 @@ class ModelCacheScanner:
     def is_model_supported(self, config_data: Dict) -> bool:
         return self._get_model_classes(config_data) is not None
 
-    def find_models_in_cache(self) -> List[Tuple[CachedRepoInfo, Dict]]:
+    def _scan_custom_path(
+        self, custom_path: str
+    ) -> List[Tuple[Union[CustomModelInfo, CachedRepoInfo], Dict]]:
+        """Scan custom model path directory structure.
+
+        Expected structure:
+        {custom_path}/
+          org1/
+            model1/
+              config.json
+            model2/
+              config.json
+          org2/
+            ...
+
+        Args:
+            custom_path: Path to custom models directory
+
+        Returns:
+            List of tuples containing (CustomModelInfo/CachedRepoInfo, config_dict)
+        """
+        custom_path_obj = Path(custom_path).expanduser().resolve()
+
+        if not custom_path_obj.exists():
+            logger.warning(f"Custom model path does not exist: {custom_path}")
+            return []
+
+        if not custom_path_obj.is_dir():
+            logger.warning(f"Custom model path is not a directory: {custom_path}")
+            return []
+
+        supported_models = []
+
+        try:
+            # Walk through org directories
+            for org_dir in custom_path_obj.iterdir():
+                if not org_dir.is_dir():
+                    continue
+
+                # Walk through model directories within org
+                for model_dir in org_dir.iterdir():
+                    if not model_dir.is_dir():
+                        continue
+
+                    config_file = model_dir / "config.json"
+                    if not config_file.exists():
+                        logger.debug(
+                            f"Model directory missing config.json: {model_dir}"
+                        )
+                        continue
+
+                    try:
+                        with open(config_file, "r") as f:
+                            config_data = json.load(f)
+
+                        if not self.is_model_supported(config_data):
+                            logger.debug(
+                                f"Model {org_dir.name}/{model_dir.name} not supported by mlx-lm"
+                            )
+                            continue
+
+                        model_id = f"{org_dir.name}/{model_dir.name}"
+                        last_modified = model_dir.stat().st_mtime
+
+                        model_info = CustomModelInfo(model_id, model_dir, last_modified)
+                        supported_models.append((model_info, config_data))
+                        logger.debug(f"Found custom model: {model_id}")
+
+                    except Exception as e:
+                        logger.error(
+                            f"Error reading config.json for {org_dir.name}/{model_dir.name}: {str(e)}"
+                        )
+
+        except Exception as e:
+            logger.error(f"Error scanning custom model path {custom_path}: {str(e)}")
+
+        return supported_models
+
+    def find_models_in_cache(self) -> List[Tuple[Union[CustomModelInfo, CachedRepoInfo], Dict]]:
         """
         Scan local cache for available models that are compatible with mlx-lm.
 
+        Scans both custom model path (if configured) and HuggingFace cache.
+        Custom path models take precedence if duplicates exist.
+
         Returns:
-            List of tuples containing (CachedRepoInfo, config_dict)
+            List of tuples containing (CustomModelInfo/CachedRepoInfo, config_dict)
         """
         supported_models = []
+        model_ids_seen = set()
 
+        # Scan custom path first if configured
+        custom_path = os.environ.get("MLX_OMNI_MODEL_PATH")
+        if custom_path:
+            custom_models = self._scan_custom_path(custom_path)
+            for model_info, config_data in custom_models:
+                supported_models.append((model_info, config_data))
+                model_ids_seen.add(model_info.repo_id)
+
+        # Scan HuggingFace cache
         for repo_info in self.cache_info.repos:
             if repo_info.repo_type != "model":
+                continue
+
+            # Skip if model already found in custom path
+            if repo_info.repo_id in model_ids_seen:
+                logger.debug(
+                    f"Skipping HF cache model {repo_info.repo_id} (already found in custom path)"
+                )
                 continue
 
             first_revision = next(iter(repo_info.revisions), None)
@@ -98,7 +208,36 @@ class ModelCacheScanner:
 
         return supported_models
 
-    def get_model_info(self, model_id: str) -> Optional[Tuple[CachedRepoInfo, Dict]]:
+    def get_model_info(
+        self, model_id: str
+    ) -> Optional[Tuple[Union[CustomModelInfo, CachedRepoInfo], Dict]]:
+        # Check custom path first if configured
+        custom_path = os.environ.get("MLX_OMNI_MODEL_PATH")
+        if custom_path:
+            custom_path_obj = Path(custom_path).expanduser().resolve()
+            model_path = custom_path_obj / model_id
+
+            if model_path.exists() and model_path.is_dir():
+                config_file = model_path / "config.json"
+                if config_file.exists():
+                    try:
+                        with open(config_file, "r") as f:
+                            config_data = json.load(f)
+                        if self.is_model_supported(config_data):
+                            model_info = CustomModelInfo(
+                                model_id, model_path, model_path.stat().st_mtime
+                            )
+                            return (model_info, config_data)
+                        else:
+                            logger.warning(
+                                f"Model {model_id} found but not compatible with mlx-lm"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Error reading config.json for {model_id}: {str(e)}"
+                        )
+
+        # Fall back to HuggingFace cache
         for repo_info in self.cache_info.repos:
             if repo_info.repo_id == model_id and repo_info.repo_type == "model":
                 first_revision = next(iter(repo_info.revisions), None)
