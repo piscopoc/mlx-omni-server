@@ -1,5 +1,6 @@
 """MLX Model types and management."""
 
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -34,6 +35,49 @@ from ...utils.logger import logger
 from .tools.chat_template import ChatTemplate
 
 
+def resolve_model_path(model_id: str) -> Path:
+    """Resolve model path with custom path precedence.
+
+    Checks MLX_OMNI_MODEL_PATH first, falls back to HuggingFace cache.
+    Expected structure: {custom_path}/org/model-name
+
+    Args:
+        model_id: Model ID (e.g., "org/model-name" or local path)
+
+    Returns:
+        Path to the model directory
+
+    Raises:
+        ValueError: If model cannot be found in custom path and is invalid for HF cache
+    """
+    custom_model_path = os.environ.get("MLX_OMNI_MODEL_PATH")
+
+    if custom_model_path:
+        custom_path = Path(custom_model_path).expanduser().resolve()
+
+        # Build the expected path for the model
+        # Handles both "org/model" and "model" formats
+        model_path = custom_path / model_id
+
+        if model_path.exists() and model_path.is_dir():
+            # Check if config.json exists to validate it's a proper model
+            if (model_path / "config.json").exists():
+                logger.debug(f"Resolved model {model_id} from custom path: {model_path}")
+                return model_path
+            else:
+                logger.debug(
+                    f"Model {model_id} found in custom path but missing config.json, falling back to HF cache"
+                )
+        else:
+            logger.debug(
+                f"Model {model_id} not found in custom path {custom_path}, falling back to HF cache"
+            )
+
+    # Fall back to HuggingFace cache via mlx_lm
+    logger.debug(f"Resolving model {model_id} via HuggingFace cache")
+    return get_model_path(model_id)
+
+
 def load_mlx_model(
     model_id: str,
     adapter_path: Optional[str] = None,
@@ -59,16 +103,19 @@ def load_mlx_model(
     model_id = model_id.strip()
 
     try:
-        # Load the main model
+        # Resolve model path first (checks custom path, then HF cache)
+        model_path = resolve_model_path(model_id)
+
+        # Load the main model using resolved path
+        # Pass the filesystem path to load() to avoid unnecessary HF cache checks
         model, tokenizer = load(
-            model_id,
+            str(model_path),
             tokenizer_config={"trust_remote_code": True},
             adapter_path=adapter_path,
         )
-        logger.info(f"Loaded model: {model_id}")
+        logger.info(f"Loaded model: {model_id} from {model_path}")
 
         # Load configuration and create chat tokenizer
-        model_path = get_model_path(model_id)
         config = load_config(model_path)
         chat_template = ChatTemplate(config["model_type"], tokenizer)
 
@@ -77,8 +124,12 @@ def load_mlx_model(
         draft_tokenizer = None
         if draft_model_id:
             try:
+                # Resolve draft model path (checks custom path, then HF cache)
+                draft_model_path = resolve_model_path(draft_model_id)
+
+                # Load draft model using resolved path
                 draft_model, draft_tokenizer = load(
-                    draft_model_id,
+                    str(draft_model_path),
                     tokenizer_config={"trust_remote_code": True},
                 )
 
@@ -88,7 +139,7 @@ def load_mlx_model(
                         f"Draft model({draft_model_id}) tokenizer does not match model tokenizer."
                     )
 
-                logger.info(f"Loaded draft model: {draft_model_id}")
+                logger.info(f"Loaded draft model: {draft_model_id} from {draft_model_path}")
             except Exception as e:
                 logger.error(f"Failed to load draft model {draft_model_id}: {e}")
                 # Continue without draft model
@@ -194,3 +245,28 @@ class MLXModel:
     def has_draft_model(self) -> bool:
         """Check if draft model is available."""
         return self.draft_model is not None and self.draft_tokenizer is not None
+
+    def cleanup(self) -> None:
+        """Explicitly release model resources.
+
+        This method should be called before the MLXModel is destroyed to ensure
+        that large model objects and any associated GPU/VRAM are properly released.
+        """
+        try:
+            # Clear model references
+            self.model = None
+            self.tokenizer = None
+            self.chat_template = None
+            self.draft_model = None
+            self.draft_tokenizer = None
+            logger.debug(f"Cleaned up resources for model: {self.model_id}")
+        except Exception as e:
+            logger.error(f"Error during MLXModel cleanup: {e}")
+
+    def __del__(self) -> None:
+        """Destructor to ensure cleanup is called."""
+        try:
+            self.cleanup()
+        except Exception:
+            # Silently ignore exceptions during destruction
+            pass

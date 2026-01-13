@@ -56,6 +56,12 @@ def build_parser():
         default="",
         help='Apply origins to CORSMiddleware. This is useful for accessing the local server directly from the browser (use --cors-allow-origins="*"). Defaults to disabled',
     )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Path to custom models directory (org/model-name structure). Takes precedence over HuggingFace cache. Defaults to None",
+    )
     return parser
 
 
@@ -97,9 +103,22 @@ def start():
     os.environ["MLX_OMNI_LOG_LEVEL"] = args.log_level
     # Set CORS through environment variable
     os.environ["MLX_OMNI_CORS"] = args.cors_allow_origins
+    # Set model path through environment variable (CLI arg takes precedence over env var)
+    if args.model_path:
+        os.environ["MLX_OMNI_MODEL_PATH"] = args.model_path
+    elif "MLX_OMNI_MODEL_PATH" not in os.environ:
+        # If neither CLI arg nor env var is set, ensure env var is not set
+        os.environ.pop("MLX_OMNI_MODEL_PATH", None)
 
     set_logger_level(logger, args.log_level)
     configure_cors_middleware(args.cors_allow_origins)
+
+    # Log the configured model path
+    model_path = os.environ.get("MLX_OMNI_MODEL_PATH")
+    if model_path:
+        logger.info(f"Custom model path configured: {model_path}")
+    else:
+        logger.info("Using HuggingFace cache for models")
 
     # Start server with uvicorn
     uvicorn.run(

@@ -117,6 +117,45 @@ MLX_OMNI_LOG_LEVEL=debug mlx-omni-server
 mlx-omni-server --help
 ```
 
+### Custom Model Path
+
+By default, models are loaded from HuggingFace's cache directory. You can configure a custom path to store models on external drives or centralized directories:
+
+**Via Environment Variable:**
+```bash
+export MLX_OMNI_MODEL_PATH="/Volumes/LLMS/models"
+mlx-omni-server
+```
+
+**Via CLI Argument:**
+```bash
+mlx-omni-server --model-path /Volumes/LLMS/models
+```
+
+**Directory Structure:**
+Models should be organized in an `org/model-name` hierarchy matching HuggingFace repository naming:
+
+```
+/Volumes/LLMS/models/
+├── mlx-community/
+│   ├── Llama-3-8B-Instruct/
+│   │   ├── config.json
+│   │   ├── model.safetensors
+│   │   └── tokenizer.json
+│   └── Qwen2-7B/
+│       └── ...
+└── Qwen/
+    └── Qwen2.5-72B-Instruct/
+        └── ...
+```
+
+**Behavior:**
+- When a custom path is configured, it takes precedence over HuggingFace cache
+- Models are searched in the custom path first
+- If not found, the server falls back to HuggingFace cache
+- Both sources are merged when listing available models
+- CLI argument (`--model-path`) overrides environment variable
+
 ## 🛠 Development
 
 <details>
@@ -148,9 +187,11 @@ uv run pre-commit run --all-files # Run hooks
 ## 🎯 Key Features
 
 **Model Management**
-- Auto-discovery of MLX models in HuggingFace cache
+- Auto-discovery of MLX models in HuggingFace cache or custom paths
+- Support for external storage via custom model directories
 - On-demand loading and intelligent caching
 - Automatic model downloading when needed
+- Merged model listing from multiple sources
 
 **Advanced Capabilities**
 - Function calling with model-specific parsers
