@@ -103,16 +103,19 @@ def load_mlx_model(
     model_id = model_id.strip()
 
     try:
-        # Load the main model
+        # Resolve model path first (checks custom path, then HF cache)
+        model_path = resolve_model_path(model_id)
+
+        # Load the main model using resolved path
+        # Pass the filesystem path to load() to avoid unnecessary HF cache checks
         model, tokenizer = load(
-            model_id,
+            str(model_path),
             tokenizer_config={"trust_remote_code": True},
             adapter_path=adapter_path,
         )
-        logger.info(f"Loaded model: {model_id}")
+        logger.info(f"Loaded model: {model_id} from {model_path}")
 
         # Load configuration and create chat tokenizer
-        model_path = resolve_model_path(model_id)
         config = load_config(model_path)
         chat_template = ChatTemplate(config["model_type"], tokenizer)
 
@@ -121,8 +124,12 @@ def load_mlx_model(
         draft_tokenizer = None
         if draft_model_id:
             try:
+                # Resolve draft model path (checks custom path, then HF cache)
+                draft_model_path = resolve_model_path(draft_model_id)
+
+                # Load draft model using resolved path
                 draft_model, draft_tokenizer = load(
-                    draft_model_id,
+                    str(draft_model_path),
                     tokenizer_config={"trust_remote_code": True},
                 )
 
@@ -132,7 +139,7 @@ def load_mlx_model(
                         f"Draft model({draft_model_id}) tokenizer does not match model tokenizer."
                     )
 
-                logger.info(f"Loaded draft model: {draft_model_id}")
+                logger.info(f"Loaded draft model: {draft_model_id} from {draft_model_path}")
             except Exception as e:
                 logger.error(f"Failed to load draft model {draft_model_id}: {e}")
                 # Continue without draft model
@@ -238,3 +245,28 @@ class MLXModel:
     def has_draft_model(self) -> bool:
         """Check if draft model is available."""
         return self.draft_model is not None and self.draft_tokenizer is not None
+
+    def cleanup(self) -> None:
+        """Explicitly release model resources.
+
+        This method should be called before the MLXModel is destroyed to ensure
+        that large model objects and any associated GPU/VRAM are properly released.
+        """
+        try:
+            # Clear model references
+            self.model = None
+            self.tokenizer = None
+            self.chat_template = None
+            self.draft_model = None
+            self.draft_tokenizer = None
+            logger.debug(f"Cleaned up resources for model: {self.model_id}")
+        except Exception as e:
+            logger.error(f"Error during MLXModel cleanup: {e}")
+
+    def __del__(self) -> None:
+        """Destructor to ensure cleanup is called."""
+        try:
+            self.cleanup()
+        except Exception:
+            # Silently ignore exceptions during destruction
+            pass

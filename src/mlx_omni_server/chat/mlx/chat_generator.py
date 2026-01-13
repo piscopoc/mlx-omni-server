@@ -156,6 +156,38 @@ class ChatGenerator:
         """Check if this wrapper has a draft model for speculative decoding."""
         return self.model.has_draft_model()
 
+    def cleanup(self) -> None:
+        """Explicitly release ChatGenerator resources.
+
+        This method should be called when the ChatGenerator is being evicted from
+        cache to ensure prompt cache and other resources are properly released.
+        """
+        try:
+            # Clear cached data
+            self._prompt_cache = None
+            self._logprobs_processor = None
+
+            # Clean up model resources
+            if self.model is not None:
+                self.model.cleanup()
+                self.model = None
+
+            # Clear references
+            self.tokenizer = None
+            self.chat_template = None
+
+            logger.debug("Cleaned up ChatGenerator resources")
+        except Exception as e:
+            logger.error(f"Error during ChatGenerator cleanup: {e}")
+
+    def __del__(self) -> None:
+        """Destructor to ensure cleanup is called."""
+        try:
+            self.cleanup()
+        except Exception:
+            # Silently ignore exceptions during destruction
+            pass
+
     def _prepare_prompt(
         self,
         messages: List[Dict[str, Any]],

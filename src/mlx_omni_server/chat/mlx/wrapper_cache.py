@@ -5,11 +5,14 @@ to avoid expensive model reloading when the same model configuration is used
 across different API endpoints.
 """
 
+import gc
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Dict, Optional
+
+import mlx.core as mx
 
 from ...utils.logger import logger
 from .chat_generator import ChatGenerator
@@ -82,11 +85,26 @@ class MLXWrapperCache:
                 expired_keys.append(key)
 
         for key in expired_keys:
-            self._cache.pop(key, None)
+            # Explicitly cleanup the ChatGenerator before removing from cache
+            wrapper = self._cache.pop(key, None)
+            if wrapper is not None:
+                try:
+                    wrapper.cleanup()
+                except Exception as e:
+                    logger.error(f"Error cleaning up wrapper for {key}: {e}")
+
             self._access_times.pop(key, None)
             logger.info(
                 f"Evicted expired model from cache (TTL={self._ttl_seconds}s): {key}"
             )
+
+        # Force garbage collection and clear MLX Metal cache to release GPU memory
+        if expired_keys:
+            gc.collect()
+            # Clear MLX Metal buffer cache to release GPU memory
+            # Without this, MLX retains memory in its Metal buffer cache
+            mx.metal.clear_cache()
+            logger.info(f"Cleared MLX Metal cache after evicting {len(expired_keys)} expired items")
 
     def _evict_lru_if_needed(self) -> None:
         """Evict least recently used item if cache is at capacity.
@@ -99,15 +117,22 @@ class MLXWrapperCache:
                 self._access_times.keys(), key=lambda k: self._access_times[k]
             )
 
-            # Remove from cache and access times
-            self._cache.pop(lru_key, None)
+            # Explicitly cleanup the ChatGenerator before removing from cache
+            wrapper = self._cache.pop(lru_key, None)
+            if wrapper is not None:
+                try:
+                    wrapper.cleanup()
+                except Exception as e:
+                    logger.error(f"Error cleaning up wrapper for {lru_key}: {e}")
+
             self._access_times.pop(lru_key, None)
 
             logger.info(f"Evicted LRU model from cache: {lru_key}")
 
-            # Optional: Clean up the evicted wrapper's resources
-            # This could include clearing VRAM, etc., but ChatGenerator
-            # doesn't currently expose cleanup methods
+            # Force garbage collection and clear MLX Metal cache to release GPU memory
+            gc.collect()
+            mx.metal.clear_cache()
+            logger.info("Cleared MLX Metal cache after LRU eviction")
 
     def _update_access_time(self, key: WrapperCacheKey) -> None:
         """Update access time for LRU tracking.
@@ -243,9 +268,22 @@ class MLXWrapperCache:
 
         with self._lock:
             cache_size = len(self._cache)
+
+            # Explicitly cleanup all wrappers before clearing
+            for key, wrapper in self._cache.items():
+                try:
+                    wrapper.cleanup()
+                except Exception as e:
+                    logger.error(f"Error cleaning up wrapper for {key}: {e}")
+
             self._cache.clear()
             self._access_times.clear()
-            logger.info(f"Cleared ChatGenerator cache ({cache_size} entries)")
+
+            # Force garbage collection and clear MLX Metal cache to release GPU memory
+            gc.collect()
+            mx.metal.clear_cache()
+
+            logger.info(f"Cleared ChatGenerator cache ({cache_size} entries) and MLX Metal cache")
 
     def get_cache_info(self) -> Dict[str, any]:
         """Get cache statistics.
