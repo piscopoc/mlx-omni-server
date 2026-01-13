@@ -103,7 +103,7 @@ class MLXWrapperCache:
             gc.collect()
             # Clear MLX Metal buffer cache to release GPU memory
             # Without this, MLX retains memory in its Metal buffer cache
-            mx.metal.clear_cache()
+            mx.clear_cache()
             logger.info(f"Cleared MLX Metal cache after evicting {len(expired_keys)} expired items")
 
     def _evict_lru_if_needed(self) -> None:
@@ -131,7 +131,7 @@ class MLXWrapperCache:
 
             # Force garbage collection and clear MLX Metal cache to release GPU memory
             gc.collect()
-            mx.metal.clear_cache()
+            mx.clear_cache()
             logger.info("Cleared MLX Metal cache after LRU eviction")
 
     def _update_access_time(self, key: WrapperCacheKey) -> None:
@@ -281,7 +281,7 @@ class MLXWrapperCache:
 
             # Force garbage collection and clear MLX Metal cache to release GPU memory
             gc.collect()
-            mx.metal.clear_cache()
+            mx.clear_cache()
 
             logger.info(f"Cleared ChatGenerator cache ({cache_size} entries) and MLX Metal cache")
 
